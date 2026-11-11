@@ -81,9 +81,10 @@ export function Scrubber({
                 ))}
           </View>
           {!!durationMs &&
-            bands.map((b) => (
+            bands.map((b, i) => (
               <View
-                key={b.startMs}
+                // By position too: a skipped chapter and an ad can start at the same moment.
+                key={`${i}:${b.startMs}`}
                 pointerEvents="none"
                 style={[
                   styles.band,

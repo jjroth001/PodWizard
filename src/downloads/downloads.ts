@@ -32,8 +32,14 @@ export function splitKey(key: string): { podcastId: number; guid: string } | nul
 async function episodeForKey(db: SQLiteDatabase, key: string) {
   const parts = splitKey(key);
   if (!parts) return null;
-  return db.getFirstAsync<{ id: number }>(
-    'SELECT id FROM episode WHERE podcast_id = ? AND guid = ?',
+  return db.getFirstAsync<{
+    id: number;
+    download_status: string | null;
+    local_path: string | null;
+  }>(
+    `SELECT e.id, s.download_status, s.local_path FROM episode e
+     LEFT JOIN episode_state s ON s.episode_id = e.id
+     WHERE e.podcast_id = ? AND e.guid = ?`,
     parts.podcastId,
     parts.guid,
   );
@@ -46,10 +52,12 @@ async function setDownloadState(
   localPath: string | null,
   automatic?: boolean,
 ) {
+  // `updated_at` is when you last listened (it orders "In progress" and "Recently played"), so a
+  // download starting or finishing leaves it alone.
   await db.runAsync(
     `INSERT INTO episode_state (episode_id, updated_at, download_status, local_path) VALUES (?, ?, ?, ?)
      ON CONFLICT (episode_id) DO UPDATE SET download_status = excluded.download_status,
-       local_path = excluded.local_path, updated_at = excluded.updated_at`,
+       local_path = excluded.local_path`,
     episodeId,
     Date.now(),
     status,
@@ -112,22 +120,56 @@ export async function removeDownload(db: SQLiteDatabase, episodeId: number) {
   await setDownloadState(db, e.id, null, null);
 }
 
-/** Applies a progress/finish event from the native side. */
+/** What a download event means for the library: its status and where the file is. */
+export function downloadStateFor(event: Pick<DownloadEvent, 'state' | 'uri'>): {
+  status: string | null;
+  localPath: string | null;
+} {
+  if (event.state === 'done' && event.uri) return { status: 'done', localPath: event.uri };
+  if (event.state === 'cancelled') return { status: null, localPath: null };
+  return { status: event.state, localPath: null };
+}
+
+/**
+ * Applies a progress/finish event from the native side. A download reports about a hundred
+ * times on its way (once a percent), and only a handful of those change anything in the
+ * library; the rest are left alone, so open lists don't reload for each one. The percentage
+ * itself is shown from the events (see progress.ts), not from the library.
+ */
 export async function applyDownloadEvent(db: SQLiteDatabase, event: DownloadEvent) {
   const episode = await episodeForKey(db, event.key);
   if (!episode) return; // an episode the app hasn't saved yet; reconcile picks it up later
-  if (event.state === 'done' && event.uri) {
-    await setDownloadState(db, episode.id, 'done', event.uri);
-  } else if (event.state === 'cancelled') {
-    await setDownloadState(db, episode.id, null, null);
-  } else {
-    await setDownloadState(db, episode.id, event.state, null);
-  }
+  const { status, localPath } = downloadStateFor(event);
+  if (status === episode.download_status && localPath === episode.local_path) return;
+  await setDownloadState(db, episode.id, status, localPath);
+}
+
+/**
+ * Deletes every download (finished, waiting or in progress) of one podcast's episodes. Run
+ * before the podcast is removed: afterwards nothing would know which files were its.
+ */
+export async function removePodcastDownloads(db: SQLiteDatabase, podcastId: number) {
+  if (!PlayerCore) return;
+  const rows = await db.getAllAsync<{ podcast_id: number; guid: string }>(
+    `SELECT e.podcast_id, e.guid FROM episode e JOIN episode_state s ON s.episode_id = e.id
+     WHERE e.podcast_id = ? AND (s.local_path IS NOT NULL OR s.download_status IS NOT NULL)`,
+    podcastId,
+  );
+  for (const row of rows) PlayerCore.deleteDownload(keyFor(row));
+}
+
+/** Whether a download belongs to a podcast that is no longer in the library at all. */
+async function podcastGone(db: SQLiteDatabase, key: string): Promise<boolean> {
+  const parts = splitKey(key); // null for other files kept here (speech models)
+  if (!parts) return false;
+  const row = await db.getFirstAsync('SELECT 1 FROM podcast WHERE id = ?', parts.podcastId);
+  return !row;
 }
 
 /**
  * Brings the library in line with the files on disk: finished downloads (including ones the
- * background refresh started) get their path; entries whose file is gone are cleared.
+ * background refresh started) get their path; entries whose file is gone are cleared; files
+ * whose podcast is gone are deleted.
  */
 export async function reconcileDownloads(db: SQLiteDatabase) {
   if (!PlayerCore) return;
@@ -163,6 +205,9 @@ export async function reconcileDownloads(db: SQLiteDatabase) {
     const episode = await episodeForKey(db, key);
     // Only the background check starts downloads the library doesn't know about.
     if (episode) await setDownloadState(db, episode.id, 'done', uri, true);
+    // A file left behind by a podcast that's gone (unfollowed): nothing can play or remove it,
+    // so it would take up space for good.
+    else if (await podcastGone(db, key)) PlayerCore.deleteDownload(key);
   }
   for (const [key, state] of activeKeys) {
     if (known.has(key)) continue;

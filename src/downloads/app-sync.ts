@@ -12,6 +12,7 @@ import { getSettings } from '@/db/settings';
 import { syncPrivateLogins } from '@/feeds/private';
 import { refreshAll } from '@/feeds/sync';
 import { runAutoBackupIfDue } from '@/lib/auto-backup';
+import { runSteps } from '@/lib/steps';
 import { redetectTranscriptAds } from '@/transcripts/transcripts';
 
 import { processInbox, writeBackgroundConfig } from './background';
@@ -21,25 +22,38 @@ import { applyDownloadEvent, enforceStorageCap, reconcileDownloads } from './dow
 const STALE_MS = 15 * 60_000;
 const OPENING_DELAY_MS = 1200;
 
-/** Everything the app does to catch up with the outside world when it opens or returns. */
-async function catchUp(db: SQLiteDatabase, { force }: { force: boolean }) {
-  await applyPendingState(db);
-  await syncPrivateLogins(db);
-  await processInbox(db);
-  await reconcileDownloads(db);
-  const settings = await getSettings(db);
-  if (force || !settings.lastRefreshAt || Date.now() - settings.lastRefreshAt > STALE_MS) {
-    await refreshAll(db);
-  }
-  await syncPrivateLogins(db);
-  await runAutoArchive(db);
-  await runAutoDownloads(db);
-  await enforceStorageCap(db);
-  await writeBackgroundConfig(db);
-  await writeAutoLibrary(db);
-  await runAutoBackupIfDue(db);
-  // Slow (decoding audio), so it carries on in the background.
-  void detectRepeatedAds(db);
+let catchingUp: Promise<void> | null = null;
+
+/**
+ * Everything the app does to catch up with the outside world when it opens or returns. One at
+ * a time: coming back to the app while a catch-up is still going joins that one instead of
+ * starting a second alongside it.
+ */
+function catchUp(db: SQLiteDatabase, { force }: { force: boolean }): Promise<void> {
+  catchingUp ??= runSteps([
+    () => applyPendingState(db),
+    () => syncPrivateLogins(db),
+    () => processInbox(db),
+    () => reconcileDownloads(db),
+    async () => {
+      const settings = await getSettings(db);
+      if (force || !settings.lastRefreshAt || Date.now() - settings.lastRefreshAt > STALE_MS) {
+        await refreshAll(db);
+      }
+    },
+    () => syncPrivateLogins(db),
+    () => runAutoArchive(db),
+    () => runAutoDownloads(db),
+    () => enforceStorageCap(db),
+    () => writeBackgroundConfig(db),
+    () => writeAutoLibrary(db),
+    () => runAutoBackupIfDue(db),
+    // Slow (decoding audio), so it carries on in the background.
+    async () => void detectRepeatedAds(db).catch(() => {}),
+  ]).finally(() => {
+    catchingUp = null;
+  });
+  return catchingUp;
 }
 
 /**
@@ -50,23 +64,24 @@ async function catchUp(db: SQLiteDatabase, { force }: { force: boolean }) {
 export function startAppSync(db: SQLiteDatabase): () => void {
   // Catch up a moment after opening, so the first taps and scrolls don't compete with it.
   const opening = setTimeout(() => {
-    void (async () => {
-      const settings = await getSettings(db);
-      await pruneUnfollowed(db, settings.nowPlaying);
+    void runSteps([
+      async () => pruneUnfollowed(db, (await getSettings(db)).nowPlaying),
       // Feeds checked in the last 15 minutes aren't checked again: reading every feed at once
       // made the first minute after opening slow.
-      await catchUp(db, { force: false });
-      await redetectTranscriptAds(db);
-    })();
+      () => catchUp(db, { force: false }),
+      () => redetectTranscriptAds(db),
+    ]);
   }, OPENING_DELAY_MS);
   const appState = AppState.addEventListener('change', (state) => {
     if (state === 'active') {
-      void catchUp(db, { force: false }).then(() => runAutoTranscribe(db));
+      void runSteps([() => catchUp(db, { force: false }), () => runAutoTranscribe(db)]);
     }
     if (state === 'background') {
-      void runAutoBackupIfDue(db);
-      void writeBackgroundConfig(db);
-      void writeAutoLibrary(db);
+      void runSteps([
+        () => runAutoBackupIfDue(db),
+        () => writeBackgroundConfig(db),
+        () => writeAutoLibrary(db),
+      ]);
     }
   });
   // Keep Android Auto's lists current while the app is open (a burst of changes writes once).
@@ -75,12 +90,17 @@ export function startAppSync(db: SQLiteDatabase): () => void {
   const changes = addDatabaseChangeListener(({ tableName }) => {
     if (!AUTO_TABLES.includes(tableName)) return;
     clearTimeout(autoTimer);
-    autoTimer = setTimeout(() => void writeAutoLibrary(db), 5000);
+    autoTimer = setTimeout(() => void runSteps([() => writeAutoLibrary(db)]), 5000);
   });
   const downloads = PlayerCore?.addListener('onDownload', (event) => {
-    void applyDownloadEvent(db, event).then(() =>
-      event.state === 'done' ? enforceStorageCap(db).then(() => detectRepeatedAds(db)) : undefined,
-    );
+    void runSteps([
+      () => applyDownloadEvent(db, event),
+      async () => {
+        if (event.state !== 'done') return;
+        await enforceStorageCap(db);
+        await detectRepeatedAds(db);
+      },
+    ]);
   });
   const transcribe = startAutoTranscribe(db);
   const onQueued = (d: SQLiteDatabase, episodeId: number) => void autoDownloadQueued(d, episodeId);

@@ -359,12 +359,19 @@ export async function restoreBackup(
     const id = await episodeId(v);
     if (id == null) continue;
     await db.runAsync(
-      `INSERT INTO ad_segment (episode_id, start_s, end_s, layer, confidence, user_verdict) VALUES (?, ?, ?, ?, 1, ?)`,
+      // Not one that's here already: restoring the same backup twice mustn't double them up.
+      `INSERT INTO ad_segment (episode_id, start_s, end_s, layer, confidence, user_verdict)
+       SELECT ?, ?, ?, ?, 1, ? WHERE NOT EXISTS (
+         SELECT 1 FROM ad_segment WHERE episode_id = ? AND user_verdict IS NOT NULL
+           AND ABS(start_s - ?) < 1 AND ABS(end_s - ?) < 1)`,
       id,
       v.start_s,
       v.end_s,
       v.layer,
       v.user_verdict,
+      id,
+      v.start_s,
+      v.end_s,
     );
   }
 

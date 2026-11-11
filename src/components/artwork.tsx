@@ -37,10 +37,13 @@ const THUMBNAIL_MAX = 220;
  * Feeds often supply huge covers (thousands of pixels); lists use a small copy the app keeps.
  */
 export function Artwork({ uri, title, size, radius = Math.round(size * 0.12), style }: Props) {
-  const [failed, setFailed] = useState(false);
+  // Which image failed, not just that one did: the mini player and the player keep one of these
+  // for as long as the app is open, and a single cover that wouldn't load (opened with no
+  // connection, say) used to leave every later episode's cover blank until the app restarted.
+  const [failedSource, setFailedSource] = useState<string | null>(null);
   const source =
     uri && size <= THUMBNAIL_MAX && PlayerCore ? (PlayerCore.artworkThumbnail(uri) ?? uri) : uri;
-  const showImage = !!source && !failed;
+  const showImage = !!source && failedSource !== source;
   return (
     <View
       style={[
@@ -59,7 +62,7 @@ export function Artwork({ uri, title, size, radius = Math.round(size * 0.12), st
           transition={200}
           cachePolicy="memory-disk"
           recyclingKey={source}
-          onError={() => setFailed(true)}
+          onError={() => setFailedSource(source ?? null)}
           accessibilityIgnoresInvertColors
         />
       )}

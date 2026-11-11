@@ -35,6 +35,7 @@ export type EpisodeItem = {
   podcast_id: number;
   guid: string;
   title: string;
+  /** Show notes. Only filled in by getEpisode; lists leave it null (see EPISODE_LIST_SELECT). */
   description: string | null;
   link: string | null;
   pub_date: number | null;
@@ -58,8 +59,9 @@ export type EpisodeItem = {
   podcast_artwork: string | null;
 };
 
-export const EPISODE_SELECT = `
-  SELECT e.id, e.podcast_id, e.guid, e.title, e.description, e.link, e.pub_date, e.duration_s,
+const episodeSelect = (description: string) => `
+  SELECT e.id, e.podcast_id, e.guid, e.title, ${description} AS description, e.link, e.pub_date,
+         e.duration_s,
          e.enclosure_url, e.mime, e.media_type, e.artwork_url, e.transcript_url, e.chapters_url,
          e.season, e.number,
          COALESCE(s.position_s, 0) AS position_s, COALESCE(s.played, 0) AS played,
@@ -69,6 +71,16 @@ export const EPISODE_SELECT = `
   FROM episode e
   JOIN podcast p ON p.id = e.podcast_id
   LEFT JOIN episode_state s ON s.episode_id = e.id`;
+
+/** One episode in full, show notes included (the episode page). */
+export const EPISODE_SELECT = episodeSelect('e.description');
+
+/**
+ * Episodes for lists: the same, without the show notes (`description` is null). Show notes run
+ * to thousands of characters an episode, and lists never draw them; reading them for every row
+ * of a long show, every time anything changed, was most of the work of keeping a list current.
+ */
+export const EPISODE_LIST_SELECT = episodeSelect('NULL');
 
 const NEW_COUNT = `
   (SELECT COUNT(*) FROM episode e LEFT JOIN episode_state s ON s.episode_id = e.id
@@ -123,10 +135,14 @@ export async function listEpisodes(
   db: SQLiteDatabase,
   podcastId: number,
   order: 'newest' | 'oldest' = 'newest',
+  /** Only the first this many (all of them when left out). */
+  limit?: number,
 ) {
   return db.getAllAsync<EpisodeItem>(
-    `${EPISODE_SELECT} WHERE e.podcast_id = ? ORDER BY e.pub_date ${order === 'oldest' ? 'ASC' : 'DESC'}, e.id DESC`,
+    `${EPISODE_LIST_SELECT} WHERE e.podcast_id = ?
+     ORDER BY e.pub_date ${order === 'oldest' ? 'ASC' : 'DESC'}, e.id DESC LIMIT ?`,
     podcastId,
+    limit ?? -1,
   );
 }
 
@@ -137,14 +153,14 @@ export async function getEpisode(db: SQLiteDatabase, id: number) {
 /** Up Next, in order. */
 export async function listQueue(db: SQLiteDatabase) {
   return db.getAllAsync<EpisodeItem>(
-    `${EPISODE_SELECT} JOIN queue_item q ON q.episode_id = e.id ORDER BY q.position`,
+    `${EPISODE_LIST_SELECT} JOIN queue_item q ON q.episode_id = e.id ORDER BY q.position`,
   );
 }
 
 /** New episodes across all followed podcasts, newest first. */
 export async function listNewReleases(db: SQLiteDatabase, limit = 100) {
   return db.getAllAsync<EpisodeItem>(
-    `${EPISODE_SELECT}
+    `${EPISODE_LIST_SELECT}
      WHERE p.subscribed = 1 AND COALESCE(e.pub_date, 0) >= p.new_since
        AND COALESCE(s.played, 0) = 0 AND COALESCE(s.archived, 0) = 0
      ORDER BY e.pub_date DESC LIMIT ?`,
@@ -155,7 +171,7 @@ export async function listNewReleases(db: SQLiteDatabase, limit = 100) {
 /** Started but not finished. */
 export async function listInProgress(db: SQLiteDatabase, limit = 50) {
   return db.getAllAsync<EpisodeItem>(
-    `${EPISODE_SELECT}
+    `${EPISODE_LIST_SELECT}
      WHERE s.position_s > 5 AND COALESCE(s.played, 0) = 0
      ORDER BY s.updated_at DESC LIMIT ?`,
     limit,
@@ -165,7 +181,7 @@ export async function listInProgress(db: SQLiteDatabase, limit = 50) {
 /** Downloaded and downloading episodes, newest first. */
 export async function listDownloads(db: SQLiteDatabase) {
   return db.getAllAsync<EpisodeItem>(
-    `${EPISODE_SELECT} WHERE s.local_path IS NOT NULL OR s.download_status IN ('queued', 'downloading', 'failed')
+    `${EPISODE_LIST_SELECT} WHERE s.local_path IS NOT NULL OR s.download_status IN ('queued', 'downloading', 'failed')
      ORDER BY e.pub_date DESC`,
   );
 }
@@ -173,7 +189,7 @@ export async function listDownloads(db: SQLiteDatabase) {
 /** Starred episodes, newest first. */
 export async function listStarred(db: SQLiteDatabase) {
   return db.getAllAsync<EpisodeItem>(
-    `${EPISODE_SELECT} WHERE s.starred = 1 ORDER BY e.pub_date DESC`,
+    `${EPISODE_LIST_SELECT} WHERE s.starred = 1 ORDER BY e.pub_date DESC`,
   );
 }
 
@@ -275,6 +291,12 @@ export async function savePodcast(
   feed: ParsedFeed,
   cache: { etag: string | null; lastModified: string | null },
   subscribe = true,
+  /**
+   * Tell newEpisodeListeners about episodes newer than the ones it had. Off while a show is
+   * being opened for the first time: its feed arrives in two parts, and the second part isn't
+   * "new episodes".
+   */
+  announce = true,
 ): Promise<number> {
   const now = Date.now();
   let id = 0;
@@ -335,7 +357,7 @@ export async function savePodcast(
     await upsertEpisodes(db, id, feed.episodes);
   });
   const since = latestBefore;
-  if (since != null) newEpisodeListeners.forEach((l) => l(db, id, since));
+  if (announce && since != null) newEpisodeListeners.forEach((l) => l(db, id, since));
   return id;
 }
 
@@ -362,7 +384,7 @@ export async function followPodcast(db: SQLiteDatabase, podcastId: number) {
 
 /**
  * Forgets podcasts that were only browsed (never followed) more than a day ago, unless one of
- * their episodes is in Up Next, the player, half-listened or starred.
+ * their episodes is in Up Next, the player, half-listened, starred, downloaded or in a playlist.
  */
 export async function pruneUnfollowed(db: SQLiteDatabase, keepEpisodeId: number | null) {
   await db.runAsync(
@@ -370,7 +392,9 @@ export async function pruneUnfollowed(db: SQLiteDatabase, keepEpisodeId: number 
        SELECT 1 FROM episode e LEFT JOIN episode_state s ON s.episode_id = e.id
        LEFT JOIN queue_item q ON q.episode_id = e.id
        WHERE e.podcast_id = podcast.id
-         AND (q.episode_id IS NOT NULL OR e.id = ? OR s.starred = 1 OR (s.position_s > 0 AND s.played = 0)))`,
+         AND (q.episode_id IS NOT NULL OR e.id = ? OR s.starred = 1 OR (s.position_s > 0 AND s.played = 0)
+           OR s.local_path IS NOT NULL OR s.download_status IS NOT NULL
+           OR EXISTS (SELECT 1 FROM playlist_item i WHERE i.episode_id = e.id)))`,
     Date.now() - 86_400_000,
     keepEpisodeId ?? -1,
   );
@@ -426,6 +450,20 @@ async function upsertState(
   );
 }
 
+/**
+ * The same, without counting as listening: `updated_at` (when you last listened, which orders
+ * "In progress" and "Recently played") stays as it was.
+ */
+async function upsertFlag(db: SQLiteDatabase, episodeId: number, column: string, value: number) {
+  await db.runAsync(
+    `INSERT INTO episode_state (episode_id, updated_at, ${column}) VALUES (?, ?, ?)
+     ON CONFLICT (episode_id) DO UPDATE SET ${column} = excluded.${column}`,
+    episodeId,
+    Date.now(),
+    value,
+  );
+}
+
 export function savePosition(db: SQLiteDatabase, episodeId: number, positionS: number) {
   return upsertState(db, episodeId, 'position_s = ?', positionS);
 }
@@ -441,11 +479,11 @@ export function setPlayed(db: SQLiteDatabase, episodeId: number, played: boolean
 }
 
 export function setStarred(db: SQLiteDatabase, episodeId: number, starred: boolean) {
-  return upsertState(db, episodeId, 'starred = ?', starred ? 1 : 0);
+  return upsertFlag(db, episodeId, 'starred', starred ? 1 : 0);
 }
 
 export function setArchived(db: SQLiteDatabase, episodeId: number, archived: boolean) {
-  return upsertState(db, episodeId, 'archived = ?', archived ? 1 : 0);
+  return upsertFlag(db, episodeId, 'archived', archived ? 1 : 0);
 }
 
 /** Marks every episode of a podcast played (the "new" badge clears). */

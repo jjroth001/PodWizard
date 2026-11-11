@@ -150,6 +150,8 @@ export function firstEpisodes(xml: string, count: number): string | null {
 function streamNewFeed(db: SQLiteDatabase, url: string, done: () => void): Promise<number> {
   // A feed that has moved is stored under its new address.
   let target: string | null = null;
+  // Whether this is a show the library didn't have (not one found again at its new address).
+  let brandNew = true;
   const save = async (
     feed: ParsedFeed,
     cache: { etag: string | null; lastModified: string | null },
@@ -157,9 +159,13 @@ function streamNewFeed(db: SQLiteDatabase, url: string, done: () => void): Promi
     if (target == null) {
       target = feed.newFeedUrl ?? url;
       const moved = target !== url ? await findPodcastByFeed(db, target) : null;
-      if (moved) return moved.id;
+      if (moved) {
+        brandNew = false;
+        return moved.id;
+      }
     }
-    return savePodcast(db, target, feed, cache, false);
+    // Not announced as new episodes: the rest of a feed arriving after its start isn't news.
+    return savePodcast(db, target, feed, cache, false, !brandNew);
   };
 
   return new Promise<number>((resolve, reject) => {
@@ -184,6 +190,10 @@ function streamNewFeed(db: SQLiteDatabase, url: string, done: () => void): Promi
         if (result.status !== 'ok')
           throw new FeedError('This address didn’t return a podcast feed.');
         const saved = await save(result.feed, result);
+        // Only the newest episode of a show you've just opened counts as new. The quick start
+        // set that from the feed's first few episodes, which in a feed that lists its oldest
+        // first (a serial, an audiobook) are the oldest: every later one then showed as new.
+        if (brandNew) await newestOnlyIsNew(db, saved);
         full = true;
         if (id == null) {
           id = saved;
@@ -198,6 +208,17 @@ function streamNewFeed(db: SQLiteDatabase, url: string, done: () => void): Promi
       })
       .finally(done);
   });
+}
+
+/** Counts only a podcast's newest episode as new (never moves the mark backwards). */
+export async function newestOnlyIsNew(db: SQLiteDatabase, podcastId: number) {
+  await db.runAsync(
+    `UPDATE podcast SET new_since = MAX(new_since,
+       COALESCE((SELECT MAX(pub_date) FROM episode WHERE podcast_id = ?), new_since))
+     WHERE id = ?`,
+    podcastId,
+    podcastId,
+  );
 }
 
 /**

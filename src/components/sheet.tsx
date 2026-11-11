@@ -190,9 +190,10 @@ export function SheetHost() {
           <PromptBody request={shown} />
         ) : (
           <ScrollView style={styles.list} bounces={false} keyboardShouldPersistTaps="handled">
-            {shown.options.map((o) => (
+            {shown.options.map((o, i) => (
               <Pressable
-                key={o.label}
+                // By position too: two folders or playlists can share a name.
+                key={`${i}:${o.label}`}
                 onPress={() => {
                   close();
                   o.onPress();

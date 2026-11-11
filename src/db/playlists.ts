@@ -1,6 +1,6 @@
 import type { SQLiteDatabase } from 'expo-sqlite';
 
-import { EPISODE_SELECT, inTransaction, type EpisodeItem } from './library';
+import { EPISODE_LIST_SELECT, inTransaction, type EpisodeItem } from './library';
 
 /**
  * Playlists. Manual ones hold a hand-picked list (any episode, even from podcasts you don't
@@ -57,7 +57,7 @@ export function parseRules(json: string | null): SmartRules {
   }
 }
 
-/** Turns rules into a WHERE clause (for EPISODE_SELECT's aliases e, s, p) plus order and limit. */
+/** Turns rules into a WHERE clause (for EPISODE_LIST_SELECT's aliases e, s, p) plus order and limit. */
 export function compileRules(rules: SmartRules, now = Date.now()) {
   const where: string[] = ['COALESCE(s.archived, 0) = 0'];
   const params: (string | number)[] = [];
@@ -124,13 +124,13 @@ export async function playlistEpisodes(
 ): Promise<EpisodeItem[]> {
   if (playlist.type === 'manual') {
     return db.getAllAsync<EpisodeItem>(
-      `${EPISODE_SELECT} JOIN playlist_item i ON i.episode_id = e.id WHERE i.playlist_id = ? ORDER BY i.position`,
+      `${EPISODE_LIST_SELECT} JOIN playlist_item i ON i.episode_id = e.id WHERE i.playlist_id = ? ORDER BY i.position`,
       playlist.id,
     );
   }
   const { where, params, order, limit } = compileRules(parseRules(playlist.rules_json));
   return db.getAllAsync<EpisodeItem>(
-    `${EPISODE_SELECT} WHERE ${where} ORDER BY ${order} LIMIT ${limit}`,
+    `${EPISODE_LIST_SELECT} WHERE ${where} ORDER BY ${order} LIMIT ${limit}`,
     ...params,
   );
 }

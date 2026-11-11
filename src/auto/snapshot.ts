@@ -22,6 +22,8 @@ import { setSetting } from '@/db/settings';
  */
 
 const PER_LIST = 50;
+/** Episodes listed under each podcast (only these are read, not the show's whole history). */
+const PER_PODCAST = 30;
 
 const episode = (e: EpisodeItem) => ({
   id: e.id,
@@ -49,7 +51,7 @@ export async function writeAutoLibrary(db: SQLiteDatabase) {
   }
   const podcastNodes = [];
   for (const p of podcasts) {
-    const items = (await listEpisodes(db, p.id)).slice(0, 30);
+    const items = await listEpisodes(db, p.id, 'newest', PER_PODCAST);
     podcastNodes.push({
       id: `pod:${p.id}`,
       title: p.title,

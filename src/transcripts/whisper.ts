@@ -55,16 +55,42 @@ type WhisperContext = {
     options: { language?: string; onProgress?: (p: number) => void; maxLen?: number },
   ) => {
     stop: () => Promise<void>;
-    promise: Promise<{ segments: { text: string; t0: number; t1: number }[] }>;
+    promise: Promise<{
+      segments: { text: string; t0: number; t1: number }[];
+      /** Stopped part-way: `segments` then only cover the start of the episode. */
+      isAborted?: boolean;
+    }>;
   };
   release: () => Promise<void>;
 };
 
 let loaded: { uri: string; context: WhisperContext } | null = null;
 
+/**
+ * A speech model takes its whole size in memory (75 to 466 MB) for as long as it's loaded, so
+ * it's let go a minute after the last transcript finishes: long enough that a run of episodes
+ * shares one load, short enough that it isn't still there while you listen later, when Android
+ * would sooner close Pod Wizard than keep it.
+ */
+const UNLOAD_AFTER_MS = 60_000;
+let unloadTimer: ReturnType<typeof setTimeout> | undefined;
+
+function unloadWhenIdle() {
+  clearTimeout(unloadTimer);
+  unloadTimer = setTimeout(() => {
+    if (state.job || !loaded) return;
+    const { context } = loaded;
+    loaded = null;
+    void context.release().catch(() => {});
+  }, UNLOAD_AFTER_MS);
+}
+
 async function contextFor(uri: string): Promise<WhisperContext> {
+  clearTimeout(unloadTimer);
   if (loaded?.uri === uri) return loaded.context;
-  await loaded?.context.release();
+  const previous = loaded;
+  loaded = null;
+  await previous?.context.release().catch(() => {});
   // Loaded on demand: whisper.rn's native code isn't in Expo Go.
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { initWhisper } = require('whisper.rn') as {
@@ -116,6 +142,18 @@ export function cancelTranscription() {
   void running?.stop();
 }
 
+/** Whether a transcript is being made right now (only one can be at a time). */
+export function isTranscribing(): boolean {
+  return state.job != null;
+}
+
+/** Thrown when a transcript was stopped on purpose (Stop, or unplugging the phone). */
+export class TranscriptionStopped extends Error {
+  constructor() {
+    super('The transcript was stopped.');
+  }
+}
+
 /**
  * Transcribes a downloaded episode. Progress runs 0–1 (converting the audio, then recognising
  * speech). Keeps the app awake only while it runs; a publisher transcript is never replaced.
@@ -152,6 +190,7 @@ export async function generateTranscript(
     throw e;
   } finally {
     setState({ job: null });
+    unloadWhenIdle();
   }
 }
 
@@ -183,6 +222,8 @@ async function transcribe(
     sub.remove();
   }
   try {
+    // Stopped while the audio was being prepared: don't start listening at all.
+    if (cancelled) throw new TranscriptionStopped();
     const context = await contextFor(uri);
     onProgress(0.2, 'Listening…');
     const job = context.transcribe(wav, {
@@ -191,7 +232,11 @@ async function transcribe(
       onProgress: (p) => onProgress(0.2 + (p / 100) * 0.8, 'Listening…'),
     });
     running = { episodeId, stop: job.stop };
-    const { segments } = await job.promise;
+    const { segments, isAborted } = await job.promise;
+    // Stopped part-way (Stop, or the phone was unplugged): what there is only covers the start
+    // of the episode. Saving it would pass for the whole transcript, and the episode would
+    // never be finished, so it's dropped and the episode stays waiting.
+    if (isAborted || cancelled) throw new TranscriptionStopped();
     const cues = cuesFromSegments(segments);
     if (cues.length === 0) throw new Error('No speech was found in this episode.');
     await db.runAsync(

@@ -65,14 +65,16 @@ export async function redetectTranscriptAds(db: SQLiteDatabase, force = false) {
   const settings = await getSettings(db);
   if (!force && settings.adDetectionVersion >= AD_DETECTION_VERSION) return;
   if (settings.adSkip) {
-    const rows = await db.getAllAsync<{ episode_id: number; cues_json: string }>(
-      'SELECT episode_id, cues_json FROM transcript',
-    );
+    // One transcript at a time: each can be a megabyte, and reading them all in one go held
+    // every one of them in memory together.
+    const rows = await db.getAllAsync<{ episode_id: number }>('SELECT episode_id FROM transcript');
     for (const row of rows) {
+      const cues = await getTranscript(db, row.episode_id); // null when damaged: skipped
+      if (!cues) continue;
       try {
-        await detectTranscriptAds(db, row.episode_id, JSON.parse(row.cues_json) as Cue[]);
+        await detectTranscriptAds(db, row.episode_id, cues);
       } catch {
-        // a damaged transcript is skipped
+        // one that can't be checked is skipped
       }
     }
   }

@@ -5,7 +5,14 @@ import { PlayerCore } from '@modules/player-core/src';
 import { getSettings } from '@/db/settings';
 
 import { ensureTranscript } from './transcripts';
-import { cancelTranscription, generateTranscript, modelUri, SPEECH_MODELS } from './whisper';
+import {
+  cancelTranscription,
+  generateTranscript,
+  isTranscribing,
+  modelUri,
+  SPEECH_MODELS,
+  TranscriptionStopped,
+} from './whisper';
 
 /**
  * Automatic transcripts: while the phone is charging and Pod Wizard is running (open or playing),
@@ -79,6 +86,13 @@ export async function runAutoTranscribe(db: SQLiteDatabase) {
         setStatus({ state: 'waiting', reason: 'charging', pending: waiting.length });
         return;
       }
+      // A transcript you started yourself is being made: only one can be at a time. Wait for
+      // the next nudge (plugging in, a download, coming back to the app) rather than trying
+      // each waiting episode in turn and writing every one of them off as failed.
+      if (isTranscribing()) {
+        setStatus({ state: 'idle' });
+        return;
+      }
       const next = waiting[0];
       setStatus({
         state: 'working',
@@ -101,10 +115,15 @@ export async function runAutoTranscribe(db: SQLiteDatabase) {
             }),
           );
         }
-      } catch {
-        // Unplugging stops the current episode on purpose; only a real failure is skipped.
+      } catch (e) {
+        // Stopped on purpose (Stop was pressed): leave the rest for the next nudge, not straight
+        // on to the next episode. Unplugging also stops it; the check at the top of the loop
+        // then shows "waiting to charge". Only a real failure is skipped for this session.
+        if (e instanceof TranscriptionStopped && PlayerCore.isCharging()) {
+          setStatus({ state: 'idle' });
+          return;
+        }
         if (PlayerCore.isCharging()) failed.add(next.id);
-        else continue;
       }
     }
   } finally {

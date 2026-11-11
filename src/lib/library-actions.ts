@@ -6,9 +6,12 @@ import { showPrompt, showSheet } from '@/components/sheet';
 import { createFolder, listFolders, movePodcastToFolder } from '@/db/folders';
 import { markAllPlayed, unsubscribe } from '@/db/library';
 import { addToPlaylist, createPlaylist, listPlaylists } from '@/db/playlists';
+import { getSettings, setSetting } from '@/db/settings';
+import { removePodcastDownloads } from '@/downloads/downloads';
 import { forgetPrivateFeed } from '@/feeds/private';
 import { refreshPodcast } from '@/feeds/sync';
 import { sharePodcast } from '@/lib/share';
+import { engine } from '@/player/engine';
 
 /** Menus shared by several screens, built on the bottom sheet. */
 
@@ -52,6 +55,32 @@ export async function chooseFolder(
         : []),
     ],
   });
+}
+
+/**
+ * Unfollows a podcast and removes everything of it from this phone: the episode in the player
+ * if it's one of its (stopped first, so it doesn't play on with nothing on screen to pause it),
+ * its downloaded files, its episodes and listening progress, and a private feed's saved sign-in.
+ */
+export async function unfollowPodcast(
+  db: SQLiteDatabase,
+  podcast: { id: number; feed_url: string },
+) {
+  const { nowPlaying } = await getSettings(db);
+  if (nowPlaying != null) {
+    const playing = await db.getFirstAsync<{ podcast_id: number }>(
+      'SELECT podcast_id FROM episode WHERE id = ?',
+      nowPlaying,
+    );
+    if (playing?.podcast_id === podcast.id) {
+      await engine.stop();
+      await setSetting(db, 'nowPlaying', null);
+    }
+  }
+  // Before the episodes go: afterwards nothing would know which files were this podcast's.
+  await removePodcastDownloads(db, podcast.id);
+  await unsubscribe(db, podcast.id);
+  await forgetPrivateFeed(db, podcast.feed_url);
 }
 
 export function podcastMenu(
@@ -101,9 +130,7 @@ export function podcastMenu(
                       style: 'destructive',
                       onPress: () => {
                         router.back();
-                        void unsubscribe(db, podcast.id);
-                        // A private feed's saved sign-in goes with it.
-                        void forgetPrivateFeed(db, podcast.feed_url);
+                        void unfollowPodcast(db, podcast);
                       },
                     },
                   ],
