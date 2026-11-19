@@ -29,11 +29,13 @@ type Props = {
   showPodcast?: boolean;
   /** Draw as a card (Dusk, Midnight) or a plain row with a divider (Paper). */
   cards: boolean;
+  /** Something before the cover, e.g. Up Next's drag handle. */
+  leading?: React.ReactNode;
   /** Extra control on the right, e.g. remove from Up Next. */
   trailing?: React.ReactNode;
 };
 
-export function EpisodeRow({ episode, showPodcast, cards, trailing }: Props) {
+export function EpisodeRow({ episode, showPodcast, cards, leading, trailing }: Props) {
   const db = useSQLiteContext();
   const theme = useTheme();
   const player = useEpisodePlayback(episode.id);
@@ -75,6 +77,7 @@ export function EpisodeRow({ episode, showPodcast, cards, trailing }: Props) {
           : [styles.flat, { borderBottomColor: theme.cardBorder }],
         pressed && { opacity: 0.7 },
       ]}>
+      {leading}
       {showPodcast && (
         <Artwork
           uri={episode.artwork_url ?? episode.podcast_artwork}

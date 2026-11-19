@@ -31,6 +31,7 @@ const DUOTONE = [
   'corners-out',
   'clock',
   'compass',
+  'dots-six-vertical',
   'dots-three-vertical',
   'download-simple',
   'export',
