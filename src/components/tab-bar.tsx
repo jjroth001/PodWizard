@@ -78,6 +78,8 @@ function MiniPlayer() {
           title={episode.podcast_title}
           size={40}
           radius={8}
+          // The bar is dark in every theme, Paper included.
+          loadingColor="rgba(255,255,255,0.12)"
         />
         <View style={styles.miniText}>
           <Txt variant="bodyBold" color={theme.miniPlayerText} numberOfLines={1}>

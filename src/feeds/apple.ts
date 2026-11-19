@@ -67,36 +67,22 @@ export async function lookupPodcasts(appleIds: string[]): Promise<DirectoryPodca
   return data.results.map(toPodcast).filter((p): p is DirectoryPodcast => !!p);
 }
 
-/** Apple's top shows for a country (feed URLs come from a follow-up lookup when needed). */
-export async function topPodcasts(country = 'us', limit = 50): Promise<DirectoryPodcast[]> {
-  const data = await getJson<{
-    feed: { results: { id: string; name: string; artistName: string; artworkUrl100: string }[] };
-  }>(`https://rss.marketingtools.apple.com/api/v2/${country}/podcasts/top/${limit}/podcasts.json`);
-  return data.feed.results.map((r) => ({
-    appleId: r.id,
-    title: r.name,
-    author: r.artistName,
-    // Ask Apple's image server for a bigger square than the 100px default.
-    artworkUrl: r.artworkUrl100.replace(/\/\d+x\d+(bb)?\.(jpg|png|webp)$/, '/600x600bb.$2'),
-    feedUrl: null,
-  }));
-}
-
-type LegacyEntry = {
+type ChartEntry = {
   'im:name': { label: string };
   'im:artist'?: { label: string };
   'im:image'?: { label: string }[];
   id: { attributes: { 'im:id': string } };
 };
 
-/** Apple's top shows in one category (Comedy is "1303"; see feeds/categories.ts). */
-export async function topInCategory(
+/** One of Apple's charts: every show, or one category (feed URLs come from a later lookup). */
+async function chart(
   country: string,
-  categoryId: string,
-  limit = 50,
+  categoryId: string | null,
+  limit: number,
 ): Promise<DirectoryPodcast[]> {
-  const data = await getJson<{ feed: { entry?: LegacyEntry[] | LegacyEntry } }>(
-    `https://itunes.apple.com/${country}/rss/toppodcasts/limit=${limit}/genre=${categoryId}/json`,
+  const genre = categoryId ? `/genre=${categoryId}` : '';
+  const data = await getJson<{ feed: { entry?: ChartEntry[] | ChartEntry } }>(
+    `https://itunes.apple.com/${country}/rss/toppodcasts/limit=${limit}${genre}/json`,
   );
   // A list of one comes back as a single entry, not a list.
   const entries = data.feed.entry ? [data.feed.entry].flat() : [];
@@ -104,11 +90,30 @@ export async function topInCategory(
     appleId: e.id.attributes['im:id'],
     title: e['im:name'].label,
     author: e['im:artist']?.label ?? '',
+    // Ask Apple's image server for a bigger square than the small default.
     artworkUrl:
       e['im:image']?.at(-1)?.label.replace(/\/\d+x\d+(bb)?\.(jpg|png|webp)$/, '/600x600bb.$2') ??
       null,
     feedUrl: null,
   }));
+}
+
+/**
+ * Apple's top shows for a country. From the same address as the category charts: Apple's newer
+ * one for the overall chart (rss.marketingtools.apple.com) often doesn't answer at all, so Top
+ * shows sat loading and then gave up.
+ */
+export function topPodcasts(country = 'us', limit = 50): Promise<DirectoryPodcast[]> {
+  return chart(country, null, limit);
+}
+
+/** Apple's top shows in one category (Comedy is "1303"; see feeds/categories.ts). */
+export function topInCategory(
+  country: string,
+  categoryId: string,
+  limit = 50,
+): Promise<DirectoryPodcast[]> {
+  return chart(country, categoryId, limit);
 }
 
 /**

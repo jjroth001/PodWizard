@@ -11,7 +11,6 @@ import {
   clearQueue,
   dequeue,
   listInProgress,
-  listNewReleases,
   listQueue,
   moveInQueue,
   queueEpisode,
@@ -23,7 +22,8 @@ import { useSetSetting, useSettings } from '@/db/use-settings';
 import { useTheme } from '@/theme/theme-provider';
 import { Spacing } from '@/theme/themes';
 
-type Section = { key: 'queue' | 'progress' | 'new'; title: string; data: EpisodeItem[] };
+/** New episodes aren't listed here: they have their own smart playlist (New Releases). */
+type Section = { key: 'queue' | 'progress'; title: string; data: EpisodeItem[] };
 
 export default function UpNextScreen() {
   const db = useSQLiteContext();
@@ -36,22 +36,16 @@ export default function UpNextScreen() {
   const tables = ['queue_item', 'episode', 'episode_state', 'podcast'] as const;
   const queue = useDbQuery(tables, listQueue).data ?? [];
   const inProgress = useDbQuery(tables, (d) => listInProgress(d, 10)).data ?? [];
-  const fresh = useDbQuery(tables, (d) => listNewReleases(d, 30)).data ?? [];
   const cards = theme.name !== 'paper';
 
   const queued = new Set(queue.map((e) => e.id));
-  const notListed = (e: EpisodeItem) => !queued.has(e.id) && e.id !== nowPlaying;
-  const progress = inProgress.filter(notListed);
-  const progressIds = new Set(progress.map((e) => e.id));
+  const progress = inProgress.filter((e) => !queued.has(e.id) && e.id !== nowPlaying);
   const sections: Section[] = [
     { key: 'queue', title: 'Up Next', data: queue },
-    { key: 'progress', title: 'In progress', data: progress },
-    {
-      key: 'new',
-      title: 'New episodes',
-      data: fresh.filter((e) => notListed(e) && !progressIds.has(e.id)),
-    },
-  ].filter((s): s is Section => s.key === 'queue' || s.data.length > 0);
+    ...(progress.length
+      ? [{ key: 'progress' as const, title: 'In progress', data: progress }]
+      : []),
+  ];
 
   const confirmClear = () =>
     Alert.alert('Clear Up Next?', 'The episodes stay in your library.', [
@@ -90,7 +84,9 @@ export default function UpNextScreen() {
       renderSectionFooter={({ section }) =>
         section.key === 'queue' && section.data.length === 0 ? (
           <Txt secondary style={styles.empty}>
-            Nothing queued. Use “Play next” or “Play last” on an episode, or add one from below.
+            {progress.length
+              ? 'Nothing queued. Use “Play next” or “Play last” on an episode, or add one from below.'
+              : 'Nothing queued. Use “Play next” or “Play last” on an episode.'}
           </Txt>
         ) : null
       }

@@ -16,6 +16,9 @@ export type Layout = 'grid' | 'large' | 'list';
 
 const label = (title: string) => title;
 
+/** A folder's empty spaces, and its covers while they load: a light wash over its colour. */
+const EMPTY_CELL = 'rgba(255,255,255,0.18)';
+
 /** "3 new" as quiet text beside a list row (never a bubble on a cover). */
 function NewCount({ count }: { count: number }) {
   const theme = useTheme();
@@ -140,6 +143,7 @@ export function FolderTile({
               title={item.name}
               size={cell}
               radius={Math.max(4, cell * 0.12)}
+              loadingColor={EMPTY_CELL}
             />
           ) : (
             <View
@@ -148,7 +152,7 @@ export function FolderTile({
                 width: cell,
                 height: cell,
                 borderRadius: Math.max(4, cell * 0.12),
-                backgroundColor: 'rgba(255,255,255,0.18)',
+                backgroundColor: EMPTY_CELL,
               }}
             />
           ),
