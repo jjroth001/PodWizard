@@ -7,6 +7,7 @@ import {
   dequeue,
   getEpisode,
   getPodcastSettings,
+  keepInQueue,
   popQueue,
   savePosition,
   setArchived,
@@ -235,9 +236,12 @@ export async function playEpisode(
     engine.setSpeed(options.speed),
     engine.setTrimSilence(options.trimSilence),
     engine.setVolumeBoost(options.volumeBoost),
-    // Where the previous episode was, from its last report before this one replaced it.
+    // Where the previous episode was, from its last report before this one replaced it. Left
+    // partway through, it goes back to the top of Up Next.
     previous?.id && previous.id !== String(episodeId) && previous.state !== 'ended'
-      ? savePosition(db, Number(previous.id), previous.positionMs / 1000)
+      ? savePosition(db, Number(previous.id), previous.positionMs / 1000).then(() =>
+          keepInQueue(db, Number(previous.id), previous.positionMs / 1000),
+        )
       : null,
     episode.played ? setPlayed(db, episodeId, false) : null,
     // Playing an archived episode brings it back.

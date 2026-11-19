@@ -194,6 +194,25 @@ export const MIGRATIONS: string[] = [
     checked_at   INTEGER NOT NULL
   );
   `,
+  // 7: half-played episodes now stay in Up Next instead of having a list of their own. The ones
+  //    the Up Next screen listed under "In progress" (the ten most recent, bar the one in the
+  //    player) join the end of it, most recent first.
+  `
+  INSERT INTO queue_item (episode_id, position)
+  SELECT episode_id,
+         (SELECT COALESCE(MAX(position), 0) FROM queue_item)
+           + ROW_NUMBER() OVER (ORDER BY updated_at DESC)
+  FROM (
+    SELECT s.episode_id, s.updated_at
+    FROM episode_state s
+    WHERE s.position_s > 5 AND s.played = 0
+      AND s.episode_id NOT IN (SELECT episode_id FROM queue_item)
+      AND s.episode_id != COALESCE(
+        (SELECT CAST(value AS INTEGER) FROM setting WHERE key = 'nowPlaying'), 0)
+    ORDER BY s.updated_at DESC
+    LIMIT 10
+  );
+  `,
 ];
 
 export async function migrateDbIfNeeded(db: SQLiteDatabase) {

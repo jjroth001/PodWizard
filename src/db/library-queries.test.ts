@@ -1,5 +1,6 @@
 import {
   getEpisode,
+  keepInQueue,
   listEpisodes,
   listInProgress,
   listQueue,
@@ -7,6 +8,7 @@ import {
   queueEpisode,
   savePosition,
   setArchived,
+  setPlayed,
   setStarred,
 } from './library';
 import { addToPlaylist, createPlaylist } from './playlists';
@@ -94,5 +96,41 @@ describe('pruneUnfollowed', () => {
     await addToPlaylist(db, await createPlaylist(db, 'Road trip', 'manual'), 301);
     await pruneUnfollowed(db, null);
     expect(left(raw)).toEqual([2, 3]);
+  });
+});
+
+describe('leaving an episode partway through', () => {
+  const queued = async (db: ReturnType<typeof testDb>['db']) =>
+    (await listQueue(db)).map((e) => e.id);
+
+  it('puts it back at the top of Up Next', async () => {
+    const { db, raw } = testDb();
+    addPodcast(raw, { id: 1, episodes: 3 });
+    await queueEpisode(db, 102, 'last');
+    await queueEpisode(db, 103, 'last');
+    await savePosition(db, 101, 240);
+
+    await keepInQueue(db, 101, 240);
+    expect(await queued(db)).toEqual([101, 102, 103]);
+
+    // Already there (queued again by hand, say): it moves to the top, without a second entry.
+    await keepInQueue(db, 103, 90);
+    expect(await queued(db)).toEqual([103, 101, 102]);
+  });
+
+  it('works with nothing else queued, and for an episode with no saved state yet', async () => {
+    const { db, raw } = testDb();
+    addPodcast(raw, { id: 1, episodes: 1 });
+    await keepInQueue(db, 101, 30);
+    expect(await queued(db)).toEqual([101]);
+  });
+
+  it('does not keep one you had barely started, or one you finished', async () => {
+    const { db, raw } = testDb();
+    addPodcast(raw, { id: 1, episodes: 2 });
+    await keepInQueue(db, 101, 4);
+    await setPlayed(db, 102, true);
+    await keepInQueue(db, 102, 1800);
+    expect(await queued(db)).toEqual([]);
   });
 });

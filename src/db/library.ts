@@ -578,6 +578,24 @@ export async function queueEpisode(db: SQLiteDatabase, episodeId: number, where:
   queueListeners.forEach((l) => l(db, episodeId));
 }
 
+/**
+ * Puts an episode you left partway through back at the top of Up Next, so it's the next thing
+ * to play: half-played episodes live in Up Next, not in a list of their own. Called when another
+ * episode takes its place in the player. One you'd barely started, or have finished, isn't kept.
+ * Auto-download isn't told, as the episode hasn't been newly added.
+ */
+export async function keepInQueue(db: SQLiteDatabase, episodeId: number, positionS: number) {
+  if (positionS <= 5) return;
+  await db.runAsync(
+    `INSERT INTO queue_item (episode_id, position)
+     SELECT e.id, COALESCE((SELECT MIN(position) FROM queue_item), 1) - 1
+     FROM episode e LEFT JOIN episode_state s ON s.episode_id = e.id
+     WHERE e.id = ? AND COALESCE(s.played, 0) = 0
+     ON CONFLICT (episode_id) DO UPDATE SET position = excluded.position`,
+    episodeId,
+  );
+}
+
 export async function dequeue(db: SQLiteDatabase, episodeId: number) {
   await db.runAsync('DELETE FROM queue_item WHERE episode_id = ?', episodeId);
 }
