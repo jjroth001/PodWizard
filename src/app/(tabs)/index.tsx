@@ -26,7 +26,11 @@ import { refreshAll } from '@/feeds/sync';
 import { useTheme } from '@/theme/theme-provider';
 import { Spacing } from '@/theme/themes';
 
-const LAYOUTS = ['grid', 'large', 'list'] as const;
+const LAYOUTS = [
+  { value: 'grid', label: 'Grid' },
+  { value: 'large', label: 'Large grid' },
+  { value: 'list', label: 'List', hint: 'With each show’s newest episode' },
+] as const;
 
 /** How long a podcast must hover over a folder before letting go drops it in. */
 const HOVER_MS = 350;
@@ -101,10 +105,17 @@ export default function PodcastsScreen() {
     }
   };
 
-  const nextLayout = () => {
-    const i = LAYOUTS.indexOf(layout);
-    void setSetting('libraryLayout', LAYOUTS[(i + 1) % LAYOUTS.length]);
-  };
+  const chooseLayout = () =>
+    showSheet({
+      title: 'Layout',
+      choice: true,
+      options: LAYOUTS.map((l) => ({
+        label: l.label,
+        hint: 'hint' in l ? l.hint : undefined,
+        selected: l.value === layout,
+        onPress: () => void setSetting('libraryLayout', l.value),
+      })),
+    });
 
   const chooseSort = () =>
     showSheet({
@@ -136,6 +147,32 @@ export default function PodcastsScreen() {
       ],
     });
   };
+
+  /** One button for how the page looks: its layout, its order and its folders. */
+  const viewMenu = () =>
+    showSheet({
+      title: 'View',
+      options: [
+        {
+          label: 'Layout',
+          hint: LAYOUTS.find((l) => l.value === layout)?.label,
+          icon: 'squares-four',
+          onPress: chooseLayout,
+        },
+        {
+          label: 'Sort by',
+          hint: LIBRARY_SORTS.find((s) => s.value === sort)?.label,
+          icon: 'sliders-horizontal',
+          onPress: chooseSort,
+        },
+        {
+          label: 'Folders',
+          hint: 'Make a folder, or edit one',
+          icon: 'folder',
+          onPress: folderMenu,
+        },
+      ],
+    });
 
   // Dropping a podcast where you want it switches to your own order and saves it.
   const onDragEnd = ({
@@ -252,15 +289,11 @@ export default function PodcastsScreen() {
             onPress={() => router.navigate('/discover')}
           />
           {!empty && (
-            <>
-              <IconButton icon="folder-plus" label="Folders" onPress={folderMenu} />
-              <IconButton
-                icon={layout === 'list' ? 'squares-four' : layout === 'grid' ? 'grid-four' : 'rows'}
-                label="Change layout"
-                onPress={nextLayout}
-              />
-              <IconButton icon="dots-three-vertical" label="Sort" onPress={chooseSort} />
-            </>
+            <IconButton
+              icon="sliders-horizontal"
+              label="View: layout, sort and folders"
+              onPress={viewMenu}
+            />
           )}
         </ScreenHeader>
         {empty ? (

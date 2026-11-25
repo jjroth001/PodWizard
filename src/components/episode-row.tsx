@@ -31,11 +31,13 @@ type Props = {
   cards: boolean;
   /** Something before the cover, e.g. Up Next's drag handle. */
   leading?: React.ReactNode;
-  /** Extra control on the right, e.g. remove from Up Next. */
+  /** Extra control on the right. */
   trailing?: React.ReactNode;
+  /** Pressing and holding the row, e.g. Up Next's menu for moving or removing it. */
+  onLongPress?: () => void;
 };
 
-export function EpisodeRow({ episode, showPodcast, cards, leading, trailing }: Props) {
+export function EpisodeRow({ episode, showPodcast, cards, leading, trailing, onLongPress }: Props) {
   const db = useSQLiteContext();
   const theme = useTheme();
   const player = useEpisodePlayback(episode.id);
@@ -68,8 +70,20 @@ export function EpisodeRow({ episode, showPodcast, cards, leading, trailing }: P
   return (
     <Pressable
       onPress={() => router.push(`/episode/${episode.id}`)}
+      onLongPress={onLongPress}
       accessibilityRole="button"
-      accessibilityHint="Shows the episode's details"
+      accessibilityHint={
+        onLongPress
+          ? "Shows the episode's details. Press and hold for more options."
+          : "Shows the episode's details"
+      }
+      // The same menu for screen readers, which can't press and hold.
+      accessibilityActions={
+        onLongPress ? [{ name: 'longpress', label: 'More options' }] : undefined
+      }
+      onAccessibilityAction={(e) => {
+        if (e.nativeEvent.actionName === 'longpress') onLongPress?.();
+      }}
       style={({ pressed }) => [
         styles.row,
         cards
@@ -82,17 +96,23 @@ export function EpisodeRow({ episode, showPodcast, cards, leading, trailing }: P
         <Artwork
           uri={episode.artwork_url ?? episode.podcast_artwork}
           title={episode.podcast_title}
-          size={52}
+          size={44}
+          radius={8}
         />
       )}
-      <View style={[styles.text, played && { opacity: 0.5 }]}>
-        <Txt variant="meta" color={isNew ? theme.accent : theme.textSecondary} numberOfLines={1}>
+      <View style={styles.text}>
+        {/* A show's name reads as a name (small capitals are kept for dates and lengths). */}
+        <Txt
+          variant={showPodcast ? 'small' : 'meta'}
+          color={isNew ? theme.accent : theme.textSecondary}
+          numberOfLines={1}>
           {showPodcast ? episode.podcast_title : meta}
         </Txt>
+        {/* Played: only the title dims. The tick and "Played" say the rest at full strength. */}
         <Txt
           variant="bodyBold"
           numberOfLines={2}
-          style={theme.serifTitles && !cards ? styles.serif : null}>
+          style={[theme.serifTitles && !cards ? styles.serif : null, played && styles.played]}>
           {episode.title}
         </Txt>
         <View style={styles.statusRow}>
@@ -168,7 +188,8 @@ export function EpisodePlaceholders({ cards, count = 6 }: { cards: boolean; coun
 const styles = StyleSheet.create({
   bar: { height: 14, borderRadius: 7 },
   barSmall: { width: '35%', height: 10, borderRadius: 5, marginTop: 6 },
-  row: { flexDirection: 'row', alignItems: 'center', gap: Spacing.three },
+  row: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  played: { opacity: 0.65 },
   card: {
     marginHorizontal: Spacing.three,
     marginBottom: Spacing.two,

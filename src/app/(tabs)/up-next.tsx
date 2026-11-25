@@ -1,12 +1,12 @@
 import { useSQLiteContext } from 'expo-sqlite';
-import { Alert, Pressable, StyleSheet, View } from 'react-native';
+import { Alert, StyleSheet } from 'react-native';
 import Reanimated, { useAnimatedRef } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Sortable from 'react-native-sortables';
 
 import { IconButton } from '@/components/controls';
 import { EpisodeRow } from '@/components/episode-row';
-import { Icon } from '@/components/icons/icon';
+import { DragHandle, HOLD_MS, HOLD_SLOP, HoldHint, showRowMenu } from '@/components/reorder';
 import { ScreenHeader } from '@/components/screen-header';
 import { useTabBarSpace } from '@/components/tab-bar';
 import { Txt } from '@/components/text';
@@ -18,17 +18,11 @@ import { useTheme } from '@/theme/theme-provider';
 import { Spacing } from '@/theme/themes';
 
 /**
- * How long the handle is held before the row lifts, and how far the finger may move meanwhile.
- * Short enough that pressing and dragging just works; long enough that a scroll which happens
- * to start on a handle still scrolls instead of moving an episode.
- */
-const HOLD_MS = 100;
-const HOLD_SLOP = 12;
-
-/**
  * Up Next: one list, put in order by dragging a row's handle. An episode you leave partway
  * through goes back to the top of it (see keepInQueue), so there's no separate "In progress"
- * list; new episodes have their own smart playlist (New Releases).
+ * list; new episodes have their own smart playlist (New Releases). Pressing and holding a row
+ * opens a menu to send it to either end or take it off the list, which leaves the row itself
+ * free for the episode's title.
  */
 export default function UpNextScreen() {
   const db = useSQLiteContext();
@@ -61,6 +55,17 @@ export default function UpNextScreen() {
     if (fromIndex === toIndex) return;
     void moveInQueue(db, data[toIndex].id, data[toIndex + 1]?.id ?? null);
   };
+
+  const rowMenu = (item: EpisodeItem) =>
+    showRowMenu({
+      title: item.title,
+      first: queue[0]?.id === item.id,
+      last: queue[queue.length - 1]?.id === item.id,
+      removeLabel: 'Remove from Up Next',
+      onTop: () => void moveInQueue(db, item.id, queue[0].id),
+      onBottom: () => void moveInQueue(db, item.id, null),
+      onRemove: () => void dequeue(db, item.id),
+    });
 
   return (
     <Reanimated.ScrollView
@@ -105,37 +110,12 @@ export default function UpNextScreen() {
                 episode={item}
                 showPodcast
                 cards={cards}
-                leading={
-                  <Sortable.Handle>
-                    {/* A button of its own, so a tap on the handle doesn't open the episode. */}
-                    <Pressable
-                      onPress={() => {}}
-                      style={styles.handle}
-                      accessibilityLabel={`Move ${item.title}`}
-                      accessibilityHint="Hold and drag up or down to change the order">
-                      <Icon
-                        name="dots-six-vertical"
-                        size={22}
-                        color={theme.textSecondary}
-                        duotone={false}
-                      />
-                    </Pressable>
-                  </Sortable.Handle>
-                }
-                trailing={
-                  <View style={styles.trailing}>
-                    <IconButton
-                      icon="x"
-                      size={18}
-                      label="Remove from Up Next"
-                      onPress={() => void dequeue(db, item.id)}
-                      hitSlop={4}
-                    />
-                  </View>
-                }
+                leading={<DragHandle title={item.title} />}
+                onLongPress={() => rowMenu(item)}
               />
             )}
           />
+          <HoldHint />
         </>
       )}
     </Reanimated.ScrollView>
@@ -149,13 +129,4 @@ const styles = StyleSheet.create({
     paddingBottom: Spacing.two,
   },
   empty: { marginHorizontal: Spacing.four, marginTop: Spacing.three },
-  // A tall, easy target for the thumb that takes little room in the row: the margins pull it
-  // toward the row's edge and the cover.
-  handle: {
-    paddingVertical: 14,
-    paddingHorizontal: 6,
-    marginLeft: -Spacing.two,
-    marginRight: -10,
-  },
-  trailing: { flexDirection: 'row', alignItems: 'center', marginRight: -Spacing.two },
 });

@@ -119,13 +119,14 @@ export function Scrubber({
 }
 
 const styles = StyleSheet.create({
-  hit: { height: 32, justifyContent: 'center' },
+  // 44 tall so the bar is easy to catch with a thumb; the bar itself stays thin, in the middle.
+  hit: { height: 44, justifyContent: 'center' },
   track: { height: 5, borderRadius: 3, overflow: 'hidden' },
   fill: { position: 'absolute', left: 0, top: 0, bottom: 0 },
   mark: { position: 'absolute', top: 0, bottom: 0, width: 2, marginLeft: -1 },
-  band: { position: 'absolute', top: 11, height: 10, borderRadius: 3, opacity: 0.22 },
-  thumb: { position: 'absolute', width: 16, height: 16, borderRadius: 8, top: 8 },
-  thumbActive: { width: 22, height: 22, borderRadius: 11, top: 5 },
+  band: { position: 'absolute', top: 17, height: 10, borderRadius: 3, opacity: 0.22 },
+  thumb: { position: 'absolute', width: 16, height: 16, borderRadius: 8, top: 14 },
+  thumbActive: { width: 22, height: 22, borderRadius: 11, top: 11 },
   times: { flexDirection: 'row', justifyContent: 'space-between' },
   tabular: { fontVariant: ['tabular-nums'] },
 });

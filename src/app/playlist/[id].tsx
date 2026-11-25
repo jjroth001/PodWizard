@@ -1,14 +1,17 @@
 import { router, useLocalSearchParams } from 'expo-router';
 import { useSQLiteContext } from 'expo-sqlite';
 import { Alert, FlatList, StyleSheet, View } from 'react-native';
+import Reanimated, { useAnimatedRef } from 'react-native-reanimated';
+import Sortable from 'react-native-sortables';
 
 import { Button, IconButton } from '@/components/controls';
 import { EpisodeRow } from '@/components/episode-row';
+import { DragHandle, HOLD_MS, HOLD_SLOP, HoldHint, showRowMenu } from '@/components/reorder';
 import { showPrompt, showSheet } from '@/components/sheet';
 import { SubScreen } from '@/components/sub-screen';
 import { useTabBarSpace } from '@/components/tab-bar';
 import { Txt } from '@/components/text';
-import { queueEpisode } from '@/db/library';
+import { queueEpisode, type EpisodeItem } from '@/db/library';
 import {
   deletePlaylist,
   getPlaylist,
@@ -28,6 +31,7 @@ export default function PlaylistScreen() {
   const db = useSQLiteContext();
   const theme = useTheme();
   const tabSpace = useTabBarSpace();
+  const scrollRef = useAnimatedRef<Reanimated.ScrollView>();
   const playlist = useDbQuery(['playlist'], (d) => getPlaylist(d, playlistId), [playlistId]).data;
   const episodes =
     useDbQuery(
@@ -39,6 +43,7 @@ export default function PlaylistScreen() {
       [playlistId],
     ).data ?? [];
   const manual = playlist?.type === 'manual';
+  const cards = theme.name !== 'paper';
 
   /** Plays the first episode and lines the rest up after it in Up Next. */
   const playAll = async () => {
@@ -94,63 +99,97 @@ export default function PlaylistScreen() {
       ],
     });
 
+  /** Dropped somewhere new: it now sits just before whatever follows it there. */
+  const onDragEnd = ({
+    data,
+    fromIndex,
+    toIndex,
+  }: {
+    data: EpisodeItem[];
+    fromIndex: number;
+    toIndex: number;
+  }) => {
+    if (fromIndex === toIndex) return;
+    void moveInPlaylist(db, playlistId, data[toIndex].id, data[toIndex + 1]?.id ?? null);
+  };
+
+  const rowMenu = (item: EpisodeItem) =>
+    showRowMenu({
+      title: item.title,
+      first: episodes[0]?.id === item.id,
+      last: episodes[episodes.length - 1]?.id === item.id,
+      removeLabel: 'Remove from playlist',
+      onTop: () => void moveInPlaylist(db, playlistId, item.id, episodes[0].id),
+      onBottom: () => void moveInPlaylist(db, playlistId, item.id, null),
+      onRemove: () => void removeFromPlaylist(db, playlistId, item.id),
+    });
+
+  const header = episodes.length ? (
+    <View style={styles.header}>
+      <Txt variant="small" secondary style={styles.flex}>
+        {episodes.length} episode{episodes.length === 1 ? '' : 's'}
+      </Txt>
+      <Button label="Play all" icon="play-fill" onPress={() => void playAll()} />
+    </View>
+  ) : null;
+  const bottom = { paddingBottom: tabSpace + Spacing.two };
+
   return (
     <SubScreen
       title={playlist?.name ?? 'Playlist'}
       actions={<IconButton icon="dots-three-vertical" label="Playlist options" onPress={menu} />}>
-      <FlatList
-        data={episodes}
-        keyExtractor={(e) => String(e.id)}
-        contentContainerStyle={{ paddingBottom: tabSpace + Spacing.two }}
-        ListHeaderComponent={
-          episodes.length ? (
-            <View style={styles.header}>
-              <Txt variant="small" secondary style={styles.flex}>
-                {episodes.length} episode{episodes.length === 1 ? '' : 's'}
-              </Txt>
-              <Button label="Play all" icon="play-fill" onPress={() => void playAll()} />
-            </View>
-          ) : null
-        }
-        renderItem={({ item, index }) => (
-          <EpisodeRow
-            episode={item}
-            showPodcast
-            cards={theme.name !== 'paper'}
-            trailing={
-              manual ? (
-                <View style={styles.trailing}>
-                  {index > 0 && (
-                    <IconButton
-                      icon="caret-up"
-                      size={18}
-                      label="Move up"
-                      hitSlop={4}
-                      onPress={() =>
-                        void moveInPlaylist(db, playlistId, item.id, episodes[index - 1].id)
-                      }
-                    />
-                  )}
-                  <IconButton
-                    icon="x"
-                    size={18}
-                    label="Remove from playlist"
-                    hitSlop={4}
-                    onPress={() => void removeFromPlaylist(db, playlistId, item.id)}
+      {manual ? (
+        // Your own playlist: put in order by dragging, like Up Next.
+        <Reanimated.ScrollView ref={scrollRef} contentContainerStyle={bottom}>
+          {header}
+          {episodes.length === 0 ? (
+            <Txt secondary style={styles.empty}>
+              Nothing here yet. Open any episode and choose “Add to playlist”.
+            </Txt>
+          ) : (
+            <>
+              <Sortable.Grid
+                data={episodes}
+                keyExtractor={(e) => String(e.id)}
+                columns={1}
+                rowGap={0}
+                scrollableRef={scrollRef}
+                customHandle
+                dragActivationDelay={HOLD_MS}
+                dragActivationFailOffset={HOLD_SLOP}
+                overDrag="vertical"
+                activeItemScale={1.02}
+                onDragEnd={onDragEnd}
+                renderItem={({ item }) => (
+                  <EpisodeRow
+                    episode={item}
+                    showPodcast
+                    cards={cards}
+                    leading={<DragHandle title={item.title} />}
+                    onLongPress={() => rowMenu(item)}
                   />
-                </View>
-              ) : undefined
-            }
-          />
-        )}
-        ListEmptyComponent={
-          <Txt secondary style={styles.empty}>
-            {manual
-              ? 'Nothing here yet. Open any episode and choose “Add to playlist”.'
-              : 'No episodes match these rules right now.'}
-          </Txt>
-        }
-      />
+                )}
+              />
+              <HoldHint />
+            </>
+          )}
+        </Reanimated.ScrollView>
+      ) : (
+        <FlatList
+          data={episodes}
+          keyExtractor={(e) => String(e.id)}
+          contentContainerStyle={bottom}
+          ListHeaderComponent={header}
+          renderItem={({ item }) => <EpisodeRow episode={item} showPodcast cards={cards} />}
+          ListEmptyComponent={
+            playlist ? (
+              <Txt secondary style={styles.empty}>
+                No episodes match these rules right now.
+              </Txt>
+            ) : null
+          }
+        />
+      )}
     </SubScreen>
   );
 }
@@ -163,6 +202,5 @@ const styles = StyleSheet.create({
     marginHorizontal: Spacing.four,
     marginBottom: Spacing.three,
   },
-  trailing: { flexDirection: 'row', alignItems: 'center', marginRight: -Spacing.two },
   empty: { marginHorizontal: Spacing.four, marginTop: Spacing.three },
 });
