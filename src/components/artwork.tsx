@@ -35,8 +35,14 @@ type Props = {
 /** Covers drawn at most this big use the small cached copy instead of the full image. */
 const THUMBNAIL_MAX = 220;
 
-/** How long a cover takes to fade in over its loading tile. */
+/** How long a cover that has to be fetched takes to fade in over its loading tile. */
 const FADE_MS = 200;
+
+/**
+ * A cover whose small copy is already on the phone only has to be read, which takes a moment
+ * at most: just enough of a fade that it doesn't pop, not enough to watch it arrive.
+ */
+const SAVED_FADE_MS = 80;
 
 /**
  * Covers that have been on screen since the app opened. Those are in memory, or a quick read
@@ -44,10 +50,27 @@ const FADE_MS = 200;
  */
 const displayed = new Set<string>();
 
+type SavedCover = { saved: boolean; color?: string };
+const NOT_SAVED: SavedCover = { saved: false };
+
+/** What's known about covers on the phone, once it can't change (saved, colour worked out). */
+const savedCovers = new Map<string, SavedCover>();
+
+/** Whether a cover's small copy is on the phone, and the colour the cover reads as. */
+function savedCover(uri: string): SavedCover {
+  const known = savedCovers.get(uri);
+  if (known) return known;
+  const cover = PlayerCore?.artworkSaved(uri) ?? NOT_SAVED;
+  if (cover.saved && cover.color) savedCovers.set(uri, cover);
+  return cover;
+}
+
 /**
- * A podcast or episode cover. While it loads there's only a quiet tile, a shade off the
- * background, which the cover fades in over. The coloured tile with the show's first letter is
- * kept for shows with no cover, or one that can't be loaded.
+ * A podcast or episode cover. While it loads there's a plain tile in the cover's own colour,
+ * which the cover fades in over; a cover the app hasn't saved yet gets a quiet tile a shade off
+ * the background instead. A cover already on the phone (every show you follow, after the first
+ * time) appears straight away. The coloured tile with the show's first letter is kept for shows
+ * with no cover, or one that can't be loaded.
  * Feeds often supply huge covers (thousands of pixels); lists use a small copy the app keeps.
  */
 export function Artwork({
@@ -63,12 +86,24 @@ export function Artwork({
   // for as long as the app is open, and a single cover that wouldn't load (opened with no
   // connection, say) used to leave every later episode's cover blank until the app restarted.
   const [failedSource, setFailedSource] = useState<string | null>(null);
-  const source =
-    uri && size <= THUMBNAIL_MAX && PlayerCore ? (PlayerCore.artworkThumbnail(uri) ?? uri) : uri;
+  const small = !!uri && size <= THUMBNAIL_MAX && !!PlayerCore;
+  const source = small ? (PlayerCore?.artworkThumbnail(uri) ?? uri) : uri;
   const showImage = !!source && failedSource !== source;
-  // Decided once, as this cover first appears (opening a show from the library, a row scrolling
-  // back into view). A cover that changes later, like the player's, still fades to the next.
-  const [instant] = useState(() => (source && displayed.has(source) ? source : null));
+  const cover = uri ? savedCover(uri) : NOT_SAVED;
+  // Decided once, as this cover first appears (opening the app, opening a show from the
+  // library, a row scrolling back into view). A cover that changes later, like the player's,
+  // still fades to the next.
+  const [first] = useState(() => ({
+    source,
+    fadeMs: !source
+      ? FADE_MS
+      : displayed.has(source)
+        ? 0
+        : // Only the small copy is saved by the app; the player's big cover is fetched as before.
+          small && cover.saved
+          ? SAVED_FADE_MS
+          : FADE_MS,
+  }));
   return (
     <View
       style={[
@@ -76,7 +111,9 @@ export function Artwork({
           width: size,
           height: size,
           borderRadius: radius,
-          backgroundColor: showImage ? (loadingColor ?? theme.element) : colorFor(title),
+          backgroundColor: showImage
+            ? (cover.color ?? loadingColor ?? theme.element)
+            : colorFor(title),
         },
         styles.clip,
         style,
@@ -86,7 +123,7 @@ export function Artwork({
           source={{ uri: source! }}
           style={StyleSheet.absoluteFill}
           contentFit="cover"
-          transition={source === instant ? 0 : FADE_MS}
+          transition={source === first.source ? first.fadeMs : FADE_MS}
           cachePolicy="memory-disk"
           recyclingKey={source}
           onDisplay={() => {

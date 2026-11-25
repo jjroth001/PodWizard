@@ -157,6 +157,24 @@ export async function listQueue(db: SQLiteDatabase) {
   );
 }
 
+/**
+ * The covers worth holding on to for good, because they're what the app opens to: the shows
+ * you follow, and the episodes in Up Next and the mini player. Everything else (Discover, a
+ * show you only looked at, a long show's per-episode covers) can be fetched again.
+ */
+export async function listKeptArtwork(db: SQLiteDatabase, nowPlayingId: number | null) {
+  const rows = await db.getAllAsync<{ url: string }>(
+    `SELECT artwork_url AS url FROM podcast WHERE subscribed = 1 AND artwork_url IS NOT NULL
+     UNION
+     SELECT COALESCE(e.artwork_url, p.artwork_url) AS url
+       FROM episode e JOIN podcast p ON p.id = e.podcast_id
+      WHERE (e.id = ? OR e.id IN (SELECT episode_id FROM queue_item))
+        AND COALESCE(e.artwork_url, p.artwork_url) IS NOT NULL`,
+    nowPlayingId ?? -1,
+  );
+  return rows.map((r) => r.url);
+}
+
 /** New episodes across all followed podcasts, newest first. */
 export async function listNewReleases(db: SQLiteDatabase, limit = 100) {
   return db.getAllAsync<EpisodeItem>(

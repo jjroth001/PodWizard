@@ -361,10 +361,16 @@ class PlayerCoreModule : Module() {
       }
     }
 
-    /** "#RRGGBB" picked from a cover image, or null. */
-    /** A small cached copy of a cover (content:// address) for lists, the car and the notification. */
+    /** A small saved copy of a cover (content:// address) for lists, the car and the notification. */
     Function("artworkThumbnail") { url: String -> Artwork.uriFor(context, url)?.toString() }
 
+    /** Whether a cover's small copy is on the phone already, and the colour it reads as if known. */
+    Function("artworkSaved") { url: String -> Artwork.saved(context, url) }
+
+    /** The covers to hold on to (followed shows, Up Next); the rest stay where Android can clear them. */
+    AsyncFunction("keepArtwork") { urls: List<String> -> Artwork.keep(context, urls) }
+
+    /** "#RRGGBB" picked from a cover image, or null. */
     AsyncFunction("artworkColor") { url: String -> runCatching { ArtworkColor.of(url) }.getOrNull() }
 
     // --- Android Auto ---

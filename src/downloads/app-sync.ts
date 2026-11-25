@@ -7,7 +7,12 @@ import { applyPendingState, writeAutoLibrary } from '@/auto/snapshot';
 import { runAutoTranscribe, startAutoTranscribe } from '@/transcripts/auto';
 import { runAutoArchive } from '@/db/archive';
 import { autoQueueNew } from '@/db/auto-queue';
-import { newEpisodeListeners, pruneUnfollowed, queueListeners } from '@/db/library';
+import {
+  listKeptArtwork,
+  newEpisodeListeners,
+  pruneUnfollowed,
+  queueListeners,
+} from '@/db/library';
 import { getSettings } from '@/db/settings';
 import { syncPrivateLogins } from '@/feeds/private';
 import { refreshAll } from '@/feeds/sync';
@@ -23,6 +28,22 @@ const STALE_MS = 15 * 60_000;
 const OPENING_DELAY_MS = 1200;
 
 let catchingUp: Promise<void> | null = null;
+
+let keptArtwork: string | null = null;
+
+/**
+ * Tells the native side which covers to keep for good (see listKeptArtwork); it moves the rest
+ * back to the cache, so an unfollowed show's cover doesn't stay on the phone for ever. Only
+ * when the list has changed: this is asked every time playback saves its place.
+ */
+async function keepLibraryArtwork(db: SQLiteDatabase) {
+  if (!PlayerCore) return;
+  const urls = await listKeptArtwork(db, (await getSettings(db)).nowPlaying);
+  const list = urls.join('\n');
+  if (list === keptArtwork) return;
+  await PlayerCore.keepArtwork(urls);
+  keptArtwork = list;
+}
 
 /**
  * Everything the app does to catch up with the outside world when it opens or returns. One at
@@ -47,6 +68,7 @@ function catchUp(db: SQLiteDatabase, { force }: { force: boolean }): Promise<voi
     () => enforceStorageCap(db),
     () => writeBackgroundConfig(db),
     () => writeAutoLibrary(db),
+    () => keepLibraryArtwork(db),
     () => runAutoBackupIfDue(db),
     // Slow (decoding audio), so it carries on in the background.
     async () => void detectRepeatedAds(db).catch(() => {}),
@@ -84,13 +106,17 @@ export function startAppSync(db: SQLiteDatabase): () => void {
       ]);
     }
   });
-  // Keep Android Auto's lists current while the app is open (a burst of changes writes once).
+  // Keep Android Auto's lists and the kept covers current while the app is open (a burst of
+  // changes writes once).
   let autoTimer: ReturnType<typeof setTimeout> | undefined;
   const AUTO_TABLES = ['queue_item', 'episode_state', 'playlist', 'playlist_item', 'podcast'];
   const changes = addDatabaseChangeListener(({ tableName }) => {
     if (!AUTO_TABLES.includes(tableName)) return;
     clearTimeout(autoTimer);
-    autoTimer = setTimeout(() => void runSteps([() => writeAutoLibrary(db)]), 5000);
+    autoTimer = setTimeout(
+      () => void runSteps([() => writeAutoLibrary(db), () => keepLibraryArtwork(db)]),
+      5000,
+    );
   });
   const downloads = PlayerCore?.addListener('onDownload', (event) => {
     void runSteps([

@@ -8,6 +8,11 @@ need a second device or a car; skip those if you can't try them.
 
 - [ ] Installs over the previous version and keeps your podcasts, positions and settings
 - [ ] Opens to the library in under a few seconds, with no blank or flashing screens
+- [ ] Swipe the app away and open it again: your shows' covers are there at once, with no grey
+      tiles fading in. A cover that does have to load (Discover) shows a tile in its own colour
+      first on later visits
+- [ ] Unfollow a show, then follow a new one: both covers still load; nothing in the library,
+      Up Next or the mini player loses its cover
 - [ ] Theme follows the phone (Paper by day, Dusk or Midnight at night); switching themes in
       Settings cross-fades and the tab bar redraws
 

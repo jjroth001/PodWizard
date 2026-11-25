@@ -152,6 +152,16 @@ declare class PlayerCoreModule extends NativeModule<PlayerCoreEvents> {
   feedStart(url: string, items: number): Promise<string | null>;
   /** A small cached copy of a cover (a content:// address), for lists and the car. */
   artworkThumbnail(url: string): string | null;
+  /**
+   * Whether a cover's small copy is on the phone already (so it can be drawn at once), and the
+   * colour it reads as ("#RRGGBB") once that's known.
+   */
+  artworkSaved(url: string): { saved: boolean; color?: string };
+  /**
+   * The covers to hold on to (followed shows, Up Next). Their small copies are kept with the
+   * app's files; every other cover stays in the cache, which Android may clear.
+   */
+  keepArtwork(urls: string[]): Promise<void>;
   /** Whether the phone is charging. */
   isCharging(): boolean;
   /** Whether Android's battery saving leaves Pod Wizard's background work alone. */
